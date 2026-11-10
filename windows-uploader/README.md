@@ -16,11 +16,11 @@ This small Windows program watches the Nikon Wireless Transmitter Utility destin
 
 The Nikon Z6 direct Access Point Wi-Fi connection can make the laptop lose Internet access. The uploader needs Internet to reach Render. Prefer connecting the camera and laptop to the same Wi-Fi router/mobile hotspot in infrastructure mode, where supported. Otherwise use Ethernet or a second Wi-Fi adapter for the laptop's Internet connection while its first Wi-Fi adapter remains connected to the camera.
 
-Test with 2–3 photos before the event. The program scans nested folders, waits for a file to stop changing, uploads it, then records its SHA-256 digest in `uploaded_state.json` so it does not upload the same image again.
+Test with 2–3 photos before the event. The program scans nested folders, waits for a file to stop changing, uploads it, then records its SHA-256 digest in `uploaded_state_EVENTCODE.json` so it does not upload the same image again.
 
 ## Security
 
 - `config.json` contains the private event admin token. Never commit or send it to guests.
-- Add `config.json` and `uploaded_state.json` to your local backup, not to this GitHub repository.
+- Add `config.json` and `uploaded_state_EVENTCODE.json` to your local backup, not to this GitHub repository.
 - Only JPG/JPEG/PNG/WEBP files are uploaded. Nikon RAW/NEF files stay on the memory card and laptop and are not uploaded.
 - The app must be configured with durable photo storage. A free Render instance has temporary storage.
