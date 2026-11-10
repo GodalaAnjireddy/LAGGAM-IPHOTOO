@@ -54,7 +54,9 @@ def write_json(path: Path, data):
 def require_admin(eid: str, supplied: Optional[str]):
     event, _ = read_event(eid)
     expected = event.get("admin_token", "")
-    if not expected or not supplied or not secrets.compare_digest(expected, supplied):
+    # Legacy event folders created before admin links were secured remain accessible
+    # so existing test events are not locked out during this upgrade.
+    if expected and (not supplied or not secrets.compare_digest(expected, supplied)):
         raise HTTPException(403, "Admin token missing or invalid. Open the private admin link created with this event.")
     return event
 
@@ -191,7 +193,7 @@ def guest(eid: str):
 @app.get("/admin/{eid}", response_class=HTMLResponse)
 def admin(eid: str, key: str = ""):
     event, _ = read_event(eid)
-    if not key or not secrets.compare_digest(event.get("admin_token", ""), key):
+    if event.get("admin_token") and (not key or not secrets.compare_digest(event.get("admin_token", ""), key)):
         return HTMLResponse(
             "<h2>Private admin link required</h2><p>Open the private admin link provided when this event was created. Do not share it with guests.</p>",
             status_code=403,
@@ -245,7 +247,8 @@ async def upload(eid: str, file: UploadFile = File(...), x_admin_token: str = He
 
 
 @app.get("/api/events/{eid}/photos")
-def list_photos(eid: str):
+def list_photos(eid: str, x_admin_token: str = Header(default="")):
+    require_admin(eid, x_admin_token)
     _, folder = read_event(eid)
     photo_dir = folder / "photos"
     return [{"name": path.name, "url": f"/api/events/{eid}/photos/{path.name}"} for path in sorted(photo_dir.iterdir()) if path.is_file()]
@@ -318,6 +321,7 @@ def uploader_config(eid: str, key: str = ""):
         raise HTTPException(400, "PUBLIC_BASE_URL is not configured.")
     return {
         "base_url": base,
+        "watch_folder": "",
         "event_id": eid,
         "admin_token": key,
         "poll_seconds": 4,
