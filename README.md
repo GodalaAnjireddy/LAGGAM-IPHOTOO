@@ -91,7 +91,7 @@ pytest -q
 
 ## Windows uploader files
 
-See [windows-uploader/README.md](windows-uploader/README.md). Never commit `config.json` or `uploaded_state.json`; they are excluded by `.gitignore`.
+See [windows-uploader/README.md](windows-uploader/README.md). Never commit `config.json` or `uploaded_state_EVENTCODE.json`; they are excluded by `.gitignore`.
 
 ## Known MVP limitations
 
