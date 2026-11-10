@@ -264,6 +264,44 @@ def list_photos(eid: str, x_admin_token: str = Header(default="")):
     return [{"name": path.name, "url": f"/api/events/{eid}/photos/{path.name}"} for path in sorted(photo_dir.iterdir()) if path.is_file()]
 
 
+@app.post("/api/events/{eid}/reindex")
+def reindex_event_photos(eid: str, x_admin_token: str = Header(default="")):
+    """Reset the event's face collection and index every stored photo again."""
+    require_admin(eid, x_admin_token)
+    _, folder = read_event(eid)
+    client = rekognition_client()
+    if client is None:
+        raise HTTPException(503, "Face matching is not configured. Add AWS Rekognition credentials in Render first.")
+    collection_id = f"laggam-{eid.lower()}"
+    try:
+        client.delete_collection(CollectionId=collection_id)
+    except client.exceptions.ResourceNotFoundException:
+        pass
+    client.create_collection(CollectionId=collection_id)
+    indexed_photos = 0
+    indexed_faces = 0
+    failed = []
+    for photo in sorted((folder / "photos").iterdir()):
+        if not photo.is_file() or photo.suffix.lower() not in IMAGE_EXTS:
+            continue
+        try:
+            status = index_photo_faces(eid, photo.read_bytes(), photo.name)
+            if status.get("indexed"):
+                indexed_photos += 1
+                indexed_faces += int(status.get("faces", 0))
+            else:
+                failed.append({"name": photo.name, "reason": status.get("reason", "Not indexed")})
+        except Exception as exc:
+            failed.append({"name": photo.name, "reason": type(exc).__name__})
+    return {
+        "indexed_photos": indexed_photos,
+        "indexed_faces": indexed_faces,
+        "failed_count": len(failed),
+        "failed": failed[:30],
+        "message": f"Indexed {indexed_faces} faces from {indexed_photos} photos.",
+    }
+
+
 @app.get("/api/events/{eid}/photos/{name}")
 def get_photo(eid: str, name: str):
     _, folder = read_event(eid)
