@@ -5,4 +5,4 @@ __pycache__/
 .env
 .pytest_cache/
 windows-uploader/config.json
-windows-uploader/uploaded_state.json
+windows-uploader/uploaded_state_*.json
