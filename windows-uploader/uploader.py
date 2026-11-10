@@ -69,7 +69,8 @@ def main():
     endpoint = f"{base_url}/api/events/{event_id}/upload"
     headers = {"X-Admin-Token": token}
     session = requests.Session()
-    state_file = HERE / STATE_FILE_TEMPLATE.format(event_id=event_id)\n    state = load_json(state_file, {})
+    state_file = HERE / STATE_FILE_TEMPLATE.format(event_id=event_id)
+    state = load_json(state_file, {})
     stable = {}
 
     print("=" * 66)
@@ -77,7 +78,8 @@ def main():
     print(f"Event code : {event_id}")
     print(f"Watch folder: {watch_folder}")
     print(f"Upload API : {endpoint}")
-    print("Keep this window open. New completed photos upload automatically.")\n    print(f"Upload checkpoint: {state_file.name}")
+    print("Keep this window open. New completed photos upload automatically.")
+    print(f"Upload checkpoint: {state_file.name}")\n    print(f"Upload checkpoint: {state_file.name}")
     print("Original photos remain in your Nikon transfer folder and memory card.")
     print("=" * 66)
 
