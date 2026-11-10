@@ -118,12 +118,17 @@ def main():
                             timeout=REQUEST_TIMEOUT,
                         )
                     if response.status_code in (200, 201):
+                        result = response.json()
+                        face = result.get("face_index", {})
                         state[digest] = {
                             "name": path.name,
                             "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                            "face_indexed": bool(face.get("indexed")),
+                            "faces": int(face.get("faces", 0)),
                         }
                         save_json(STATE_FILE, state)
-                        print(f"[UPLOADED] {path.name}")
+                        print(f"[UPLOADED + FACE INDEXED: {face.get('faces', 0)} faces] {path.name}" if face.get("indexed")
+                              else f"[UPLOADED; AI NOT INDEXED] {path.name} — {face.get('reason', 'Check AWS configuration')}")
                     elif response.status_code == 403:
                         print("[ERROR] Admin token rejected. Download a fresh uploader config from event admin.")
                         time.sleep(15)
