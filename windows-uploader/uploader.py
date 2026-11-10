@@ -14,7 +14,7 @@ import requests
 
 HERE = Path(__file__).resolve().parent
 CONFIG_FILE = HERE / "config.json"
-STATE_FILE = HERE / "uploaded_state.json"
+STATE_FILE_TEMPLATE = "uploaded_state_{event_id}.json"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 STABILITY_PASSES = 2
 REQUEST_TIMEOUT = (15, 180)
@@ -69,7 +69,7 @@ def main():
     endpoint = f"{base_url}/api/events/{event_id}/upload"
     headers = {"X-Admin-Token": token}
     session = requests.Session()
-    state = load_json(STATE_FILE, {})
+    state_file = HERE / STATE_FILE_TEMPLATE.format(event_id=event_id)\n    state = load_json(state_file, {})
     stable = {}
 
     print("=" * 66)
@@ -77,7 +77,7 @@ def main():
     print(f"Event code : {event_id}")
     print(f"Watch folder: {watch_folder}")
     print(f"Upload API : {endpoint}")
-    print("Keep this window open. New completed photos upload automatically.")
+    print("Keep this window open. New completed photos upload automatically.")\n    print(f"Upload checkpoint: {state_file.name}")
     print("Original photos remain in your Nikon transfer folder and memory card.")
     print("=" * 66)
 
@@ -126,7 +126,7 @@ def main():
                             "face_indexed": bool(face.get("indexed")),
                             "faces": int(face.get("faces", 0)),
                         }
-                        save_json(STATE_FILE, state)
+                        save_json(state_file, state)
                         print(f"[UPLOADED + FACE INDEXED: {face.get('faces', 0)} faces] {path.name}" if face.get("indexed")
                               else f"[UPLOADED; AI NOT INDEXED] {path.name} — {face.get('reason', 'Check AWS configuration')}")
                     elif response.status_code == 403:
@@ -138,7 +138,7 @@ def main():
                     print(f"[NETWORK] {path.name}: {exc}. Will retry.")
             time.sleep(poll_seconds)
         except KeyboardInterrupt:
-            print("\nUploader stopped. Uploaded files are recorded in uploaded_state.json.")
+            print("\nUploader stopped. Uploaded files are recorded in the event-specific checkpoint file.")
             return 0
         except Exception as exc:
             print(f"[WARNING] {exc}. Retrying in {poll_seconds} seconds.")
