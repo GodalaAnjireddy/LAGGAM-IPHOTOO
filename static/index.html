@@ -3,14 +3,14 @@
 <body>
 <header class="site-header"><a class="brand" href="/"><img src="/static/logo.svg" alt="LAGGAM IPHOTOO logo"></a><div class="studio-name">SriLekha Photography</div><span class="header-tagline">Every event. Every moment. Find instantly.</span></header>
 <main class="shell">
-<section class="hero"><div class="eyebrow">LAGGAM IPHOTOO · SRI LEKHA PHOTOGRAPHY</div><h1>Every event.<br><em>Every moment, found instantly.</em></h1><p>Create a photo gallery for weddings, birthdays, saree functions and every celebration. Guests scan one QR code and find their photos with a selfie.</p></section>
+<section class="hero"><div class="eyebrow">LAGGAM IPHOTOO · EVENT GALLERY</div><h1>Every event.<br><em>Every moment, found instantly.</em></h1><p>Create a photo gallery for weddings, birthdays, saree functions and every celebration. Guests scan one QR code and find their photos with a selfie.</p></section>
 <section class="panel" id="create-panel"><div class="section-kicker">START A NEW GALLERY</div><h2>Create an event</h2><form id="create-form">
 <label>Event name<input name="name" placeholder="Prabhakar weds Aruna" maxlength="100" required></label>
 <div class="form-grid"><label>Event type<select name="event_type" required><option>Wedding</option><option>Birthday</option><option>Saree Function</option><option>Engagement</option><option>Reception</option><option>Anniversary</option><option>Other Event</option></select></label><label>Date<input name="date" type="date"></label></div>
 <label>Venue<input name="venue" placeholder="Enter venue (optional)" maxlength="160"></label>
 <button class="primary" type="submit">Create event <span>→</span></button><p class="form-note">A unique event code, guest link, private admin link and QR code will be generated.</p></form><div id="created-result" aria-live="polite"></div></section>
 <section class="events-section"><div class="events-heading"><div><div class="section-kicker">YOUR GALLERIES</div><h2>Created events</h2></div><button class="secondary small" id="refresh-events" type="button">Refresh list ↻</button></div><div id="events-list" class="events-grid"><p class="muted">Loading saved events…</p></div></section>
-</main><footer>© LAGGAM IPHOTOO <span>·</span> SriLekha Photography</footer>
+</main><footer>© LAGGAM IPHOTOO</footer>
 <script>
 const $=s=>document.querySelector(s);
 const base=location.origin;
