@@ -90,17 +90,27 @@ def normalized_jpeg(raw: bytes) -> bytes:
     return output.getvalue()
 
 
+def rekognition_jpeg(raw: bytes) -> bytes:
+    # Rekognition image-byte operations have a 5 MB limit. Resize/compress
+    # deterministically while keeping enough detail for face matching.
+    image = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
+    for max_side in (3000, 2400, 1800, 1400, 1000):
+        candidate = image.copy()
+        candidate.thumbnail((max_side, max_side))
+        for quality in (82, 72, 62):
+            output = io.BytesIO()
+            candidate.save(output, format="JPEG", quality=quality, optimize=True)
+            data = output.getvalue()
+            if len(data) <= 5 * 1024 * 1024:
+                return data
+    raise ValueError("Image could not be compressed below the 5 MB face-service limit.")
+
+
 def index_photo_faces(eid: str, raw: bytes, filename: str):
     client = ensure_face_collection(eid)
     if client is None:
         return {"indexed": False, "faces": 0, "reason": "Face search is not configured. Add AWS Rekognition credentials to Render."}
-    image_bytes = normalized_jpeg(raw)
-    if len(image_bytes) > 5 * 1024 * 1024:
-        image = Image.open(io.BytesIO(image_bytes))
-        image.thumbnail((2400, 2400))
-        output = io.BytesIO()
-        image.save(output, format="JPEG", quality=85)
-        image_bytes = output.getvalue()
+    image_bytes = rekognition_jpeg(raw)
     response = client.index_faces(
         CollectionId=f"laggam-{eid.lower()}",
         Image={"Bytes": image_bytes},
@@ -273,9 +283,9 @@ async def face_search(eid: str, selfie: UploadFile = File(...), consent: bool = 
     if len(raw) > 8 * 1024 * 1024:
         raise HTTPException(413, "Selfie must be smaller than 8 MB.")
     try:
-        image_bytes = normalized_jpeg(raw)
+        image_bytes = rekognition_jpeg(raw)
     except Exception:
-        raise HTTPException(400, "Please upload a valid selfie.")
+        raise HTTPException(400, "Please upload a valid selfie that can be reduced below the 5 MB face-search limit.")
     client = rekognition_client()
     if client is None:
         raise HTTPException(503, "Face matching is not configured yet. The event gallery is available, but AI search needs AWS Rekognition setup by the administrator.")
