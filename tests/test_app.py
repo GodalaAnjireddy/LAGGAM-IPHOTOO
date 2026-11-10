@@ -121,3 +121,10 @@ def test_admin_reindex_requires_admin_and_reports_unconfigured_ai(client):
         headers={"X-Admin-Token": created["admin_token"]},
     )
     assert allowed.status_code == 503
+
+def test_windows_uploader_source_has_valid_python_syntax():
+    import ast
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "windows-uploader" / "uploader.py"
+    ast.parse(source.read_text(encoding="utf-8"))
