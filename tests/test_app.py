@@ -110,3 +110,14 @@ def test_legacy_event_folder_remains_accessible(client, tmp_path):
     (folder / "event.json").write_text(json.dumps({"id": "ABC12345", "name": "Old event"}), encoding="utf-8")
     assert client.get("/event/ABC12345").status_code == 200
     assert client.get("/admin/ABC12345").status_code == 200
+
+def test_admin_reindex_requires_admin_and_reports_unconfigured_ai(client):
+    created = create_event(client)
+    event_id = created["event"]["id"]
+    denied = client.post(f"/api/events/{event_id}/reindex")
+    assert denied.status_code == 403
+    allowed = client.post(
+        f"/api/events/{event_id}/reindex",
+        headers={"X-Admin-Token": created["admin_token"]},
+    )
+    assert allowed.status_code == 503
