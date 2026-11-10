@@ -63,7 +63,8 @@ The face-matching code is present, but **selfie matching remains disabled until 
    - `rekognition:CreateCollection`
    - `rekognition:DescribeCollection`
    - `rekognition:IndexFaces`
-   - `rekognition:SearchFacesByImage`\n   - `rekognition:DeleteCollection` (needed for the admin Re-index all photos action)
+   - `rekognition:SearchFacesByImage`
+   - `rekognition:DeleteCollection` (needed for the admin Re-index all photos action)
 3. In Render → Environment, set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_REGION=ap-south-1`. Never put the secret key in GitHub or in a public message.
 4. Redeploy. Upload one test photo containing a visible face. The upload response reports the face-indexing result.
 5. If you uploaded photos before configuring AWS, open event Admin and click **Re-index all photos for face search** once. This rebuilds the event's Rekognition collection from the stored photos.\n6. Test with a clear front-facing selfie and verify the matching images before relying on it.
