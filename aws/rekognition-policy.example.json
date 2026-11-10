@@ -1,0 +1,16 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "LaggamIphotooFaceCollections",
+      "Effect": "Allow",
+      "Action": [
+        "rekognition:CreateCollection",
+        "rekognition:DescribeCollection",
+        "rekognition:IndexFaces",
+        "rekognition:SearchFacesByImage"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
