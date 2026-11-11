@@ -130,7 +130,7 @@ def main():
                         }
                         save_json(state_file, state)
                         print(f"[UPLOADED + FACE INDEXED: {face.get('faces', 0)} faces] {path.name}" if face.get("indexed")
-                              else f"[UPLOADED; AI NOT INDEXED] {path.name} — {face.get('reason', 'Check AWS configuration')}")
+                              else f"[UPLOADED; AI NOT INDEXED] {path.name} — {face.get('reason', 'Check that local face models are installed and the app can load them')}")
                     elif response.status_code == 403:
                         print("[ERROR] Admin token rejected. Download a fresh uploader config from event admin.")
                         time.sleep(15)
