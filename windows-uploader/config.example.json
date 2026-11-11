@@ -1,0 +1,7 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "event_id": "PASTE_EVENT_CODE_HERE",
+  "admin_token": "PASTE_PRIVATE_ADMIN_TOKEN_HERE",
+  "watch_folder": "C:\\Users\\YourWindowsUser\\Pictures\\Wireless Transmitter Utility",
+  "poll_seconds": 4
+}

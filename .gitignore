@@ -1,3 +1,11 @@
 data/
 __pycache__/
+*.py[cod]
+.venv/
 .env
+.pytest_cache/
+windows-uploader/config.json
+windows-uploader/uploaded_state_*.json
+
+# Downloaded face-model weights (cached locally, not committed)
+models/*.onnx

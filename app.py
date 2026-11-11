@@ -1,120 +1,364 @@
-import os, json, uuid, shutil, io, threading, time
+import io
+import json
+import os
+import secrets
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
+from typing import Optional
+
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from PIL import Image
+from PIL import Image, ImageOps
 
-ROOT=Path(__file__).resolve().parent
-DATA=Path(os.getenv("PHOTOO_DATA","./data")).resolve()
-DATA.mkdir(parents=True,exist_ok=True)
-app=FastAPI(title="LAGGAM IPHOTOO")
-app.mount("/static",StaticFiles(directory=ROOT/"static"),name="static")
+ROOT = Path(__file__).resolve().parent
+DATA = Path(os.getenv("PHOTOO_DATA", "./data")).resolve()
+DATA.mkdir(parents=True, exist_ok=True)
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "25")) * 1024 * 1024
+FACE_ENGINE = "OpenCV YuNet + SFace (local)"
 
-def event_dir(eid):
-    p=DATA/eid
-    if not p.is_dir(): raise HTTPException(404,"Event not found")
-    return p
-def read_event(eid):
-    p=event_dir(eid)
-    return json.loads((p/"event.json").read_text()),p
+app = FastAPI(title="LAGGAM IPHOTOO")
+app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
-@app.get("/",response_class=HTMLResponse)
+
+def safe_event_id(eid: str) -> str:
+    if not eid or not all(c in "0123456789ABCDEFabcdef-" for c in eid):
+        raise HTTPException(404, "Event not found")
+    return eid
+
+
+def event_dir(eid: str) -> Path:
+    folder = (DATA / safe_event_id(eid)).resolve()
+    if DATA not in folder.parents or not folder.is_dir():
+        raise HTTPException(404, "Event not found")
+    return folder
+
+
+def read_event(eid: str):
+    folder = event_dir(eid)
+    metadata = folder / "event.json"
+    if not metadata.is_file():
+        raise HTTPException(404, "Event not found")
+    return json.loads(metadata.read_text(encoding="utf-8")), folder
+
+
+def write_json(path: Path, data):
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp.replace(path)
+
+
+def require_admin(eid: str, supplied: Optional[str]):
+    event, _ = read_event(eid)
+    expected = event.get("admin_token", "")
+    # Legacy event folders created before admin links were secured remain accessible
+    # so existing test events are not locked out during this upgrade.
+    if expected and (not supplied or not secrets.compare_digest(expected, supplied)):
+        raise HTTPException(403, "Admin token missing or invalid. Open the private admin link created with this event.")
+    return event
+
+
+def public_origin(request: Request) -> str:
+    configured = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+    if configured:
+        return configured
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "127.0.0.1:8000"
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    if host.endswith("trycloudflare.com"):
+        scheme = "https"
+    return f"{scheme}://{host}".rstrip("/")
+
+
+def index_photo_faces(eid: str, raw: bytes, filename: str):
+    from local_face import index_photo
+    _, folder = read_event(eid)
+    return index_photo(folder, raw, filename)
+
+
+def ensure_thumbnail(event_folder: Path, photo_path: Path) -> Path:
+    """Create a small cached WebP preview; original file is never modified."""
+    thumb_dir = event_folder / "thumbnails"
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    thumb_path = thumb_dir / (photo_path.name + ".webp")
+    try:
+        if thumb_path.is_file() and thumb_path.stat().st_mtime_ns >= photo_path.stat().st_mtime_ns:
+            return thumb_path
+    except OSError:
+        pass
+
+    with Image.open(photo_path) as source:
+        image = ImageOps.exif_transpose(source)
+        image.thumbnail((640, 640), Image.Resampling.LANCZOS)
+        if image.mode not in ("RGB", "RGBA"):
+            image = image.convert("RGB")
+        temp = thumb_path.with_suffix(thumb_path.suffix + ".tmp")
+        image.save(temp, format="WEBP", quality=72, method=4)
+        temp.replace(thumb_path)
+    return thumb_path
+
+
+def list_event_records():
+    records = []
+    for folder in DATA.iterdir():
+        if not folder.is_dir():
+            continue
+        metadata = folder / "event.json"
+        if not metadata.is_file():
+            continue
+        try:
+            event = json.loads(metadata.read_text(encoding="utf-8"))
+            photo_dir = folder / "photos"
+            event["photo_count"] = sum(1 for item in photo_dir.iterdir() if item.is_file()) if photo_dir.is_dir() else 0
+            records.append(event)
+        except Exception:
+            continue
+    return sorted(records, key=lambda item: item.get("created_at", ""), reverse=True)
+
+
+@app.get("/", response_class=HTMLResponse)
 def home():
-    return (ROOT/"static"/"index.html").read_text()
+    return (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+
+
+@app.get("/api/events")
+def events():
+    # Public summaries only. Never expose event admin tokens.
+    fields = ("id", "name", "event_type", "date", "venue", "created_at", "photo_count")
+    return [{key: event.get(key, "") for key in fields} for event in list_event_records()]
+
 
 @app.post("/api/events")
-def create_event(name:str=Form(...),date:str=Form(""),venue:str=Form("")):
-    eid=uuid.uuid4().hex[:8].upper()
-    p=DATA/eid; (p/"photos").mkdir(parents=True); (p/"faces").mkdir()
-    ev={"id":eid,"name":name.strip(),"date":date,"venue":venue}
-    (p/"event.json").write_text(json.dumps(ev),encoding="utf-8")
-    return {"event":ev,"guest_url":f"/event/{eid}","admin_url":f"/admin/{eid}"}
+def create_event(
+    request: Request,
+    name: str = Form(...),
+    event_type: str = Form("Wedding"),
+    date: str = Form(""),
+    venue: str = Form(""),
+):
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "Enter an event name.")
+    allowed = {"Wedding", "Birthday", "Saree Function", "Engagement", "Reception", "Anniversary", "Other Event"}
+    if event_type not in allowed:
+        raise HTTPException(400, "Select a valid event type.")
+    event_id = uuid.uuid4().hex[:8].upper()
+    folder = DATA / event_id
+    (folder / "photos").mkdir(parents=True, exist_ok=False)
+    token = secrets.token_urlsafe(32)
+    event = {
+        "id": event_id,
+        "name": name,
+        "event_type": event_type,
+        "date": date,
+        "venue": venue.strip(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "admin_token": token,
+    }
+    write_json(folder / "event.json", event)
+    base = public_origin(request)
+    guest_url = f"{base}/event/{event_id}"
+    admin_url = f"{base}/admin/{event_id}?key={token}"
+    public_event = {key: value for key, value in event.items() if key != "admin_token"}
+    return {
+        "event": public_event,
+        "guest_url": guest_url,
+        "admin_url": admin_url,
+        "admin_token": token,
+        "qr_url": f"/api/events/{event_id}/qr",
+    }
 
-@app.get("/event/{eid}",response_class=HTMLResponse)
-def guest(eid):
-    ev,_=read_event(eid)
-    page=(ROOT/"static"/"guest.html").read_text()
-    return page.replace("__EVENT__",json.dumps(ev).replace("</","<\\/")).replace("__ID__",eid)
 
-@app.get("/admin/{eid}",response_class=HTMLResponse)
-def admin(eid):
-    ev,_=read_event(eid)
-    page=(ROOT/"static"/"admin.html").read_text()
-    return page.replace("__EVENT__",json.dumps(ev).replace("</","<\\/")).replace("__ID__",eid)
+@app.get("/event/{eid}", response_class=HTMLResponse)
+def guest(eid: str):
+    event, _ = read_event(eid)
+    page = (ROOT / "static" / "guest.html").read_text(encoding="utf-8")
+    safe_event = json.dumps({key: value for key, value in event.items() if key != "admin_token"}, ensure_ascii=False).replace("</", "<\\/")
+    return page.replace("__EVENT__", safe_event).replace("__ID__", eid)
+
+
+@app.get("/admin/{eid}", response_class=HTMLResponse)
+def admin(eid: str, key: str = ""):
+    event, _ = read_event(eid)
+    if event.get("admin_token") and (not key or not secrets.compare_digest(event.get("admin_token", ""), key)):
+        return HTMLResponse(
+            "<h2>Private admin link required</h2><p>Open the private admin link provided when this event was created. Do not share it with guests.</p>",
+            status_code=403,
+        )
+    page = (ROOT / "static" / "admin.html").read_text(encoding="utf-8")
+    safe_event = json.dumps({field: value for field, value in event.items() if field != "admin_token"}, ensure_ascii=False).replace("</", "<\\/")
+    return page.replace("__EVENT__", safe_event).replace("__ID__", eid).replace("__ADMIN_TOKEN__", key)
+
 
 @app.get("/api/events/{eid}/qr")
-def qr(eid):
+def qr(eid: str, request: Request):
+    read_event(eid)
     import qrcode
-    # QR URL uses public origin configured at deploy time
-    origin=os.getenv("PUBLIC_BASE_URL","").rstrip("/")
-    if not origin: raise HTTPException(400,"Set PUBLIC_BASE_URL to deployed website URL")
-    img=qrcode.make(origin+f"/event/{eid}")
-    b=io.BytesIO(); img.save(b,format="PNG"); b.seek(0)
-    from fastapi.responses import StreamingResponse
-    return StreamingResponse(b,media_type="image/png")
+    origin = public_origin(request)
+    image = qrcode.make(f"{origin}/event/{eid}")
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    output.seek(0)
+    return StreamingResponse(output, media_type="image/png")
+
 
 @app.post("/api/events/{eid}/upload")
-async def upload(eid,file:UploadFile=File(...)):
-    _,p=read_event(eid); content=await file.read()
-    if len(content)>25*1024*1024: raise HTTPException(413,"Image max 25 MB")
-    try: Image.open(io.BytesIO(content)).verify()
-    except Exception: raise HTTPException(400,"Invalid image")
-    ext=Path(file.filename or "photo.jpg").suffix.lower()
-    if ext not in [".jpg",".jpeg",".png",".webp"]: ext=".jpg"
-    name=uuid.uuid4().hex+ext
-    (p/"photos"/name).write_bytes(content)
-    return {"ok":True,"name":name}
+async def upload(eid: str, file: UploadFile = File(...), x_admin_token: str = Header(default="")):
+    require_admin(eid, x_admin_token)
+    _, folder = read_event(eid)
+    raw = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, f"Image exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
+    if Path(file.filename or "").suffix.lower() not in IMAGE_EXTS:
+        raise HTTPException(400, "Only JPG, JPEG, PNG and WEBP images are supported.")
+    try:
+        Image.open(io.BytesIO(raw)).verify()
+    except Exception:
+        raise HTTPException(400, "The uploaded file is not a valid image.")
+    extension = Path(file.filename or ".jpg").suffix.lower()
+    filename = f"{uuid.uuid4().hex}{extension}"
+    original_path = folder / "photos" / filename
+    original_path.write_bytes(raw)
+    # Build a small preview once; guest phones never need the 12 MB original to show a result.
+    try:
+        ensure_thumbnail(folder, original_path)
+    except Exception:
+        pass
+    face_status = {"indexed": False, "faces": 0, "reason": "Face AI not configured"}
+    try:
+        face_status = index_photo_faces(eid, raw, filename)
+    except Exception as exc:
+        face_status = {"indexed": False, "faces": 0, "reason": f"Face indexing failed: {type(exc).__name__}"}
+    return {
+        "ok": True,
+        "name": filename,
+        "photo_url": f"/api/events/{eid}/photos/{filename}",
+        "face_index": face_status,
+    }
+
 
 @app.get("/api/events/{eid}/photos")
-def list_photos(eid):
-    _,p=read_event(eid)
-    return [{"name":f.name,"url":f"/api/events/{eid}/photos/{f.name}"} for f in sorted((p/"photos").iterdir()) if f.is_file()]
+def list_photos(eid: str, x_admin_token: str = Header(default="")):
+    require_admin(eid, x_admin_token)
+    _, folder = read_event(eid)
+    photo_dir = folder / "photos"
+    result = []
+    for path in sorted(photo_dir.iterdir()):
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTS:
+            result.append({
+                "name": path.name,
+                "url": f"/api/events/{eid}/photos/{path.name}",
+                "thumbnail_url": f"/api/events/{eid}/thumbnails/{path.name}",
+            })
+    return result
+
+
+@app.post("/api/events/{eid}/reindex")
+def reindex_event_photos(eid: str, x_admin_token: str = Header(default="")):
+    """Rebuild the local face index from all photographs in this event."""
+    require_admin(eid, x_admin_token)
+    _, folder = read_event(eid)
+    from local_face import clear_event_index
+    clear_event_index(folder)
+    indexed_photos = 0
+    indexed_faces = 0
+    failed = []
+    for photo in sorted((folder / "photos").iterdir()):
+        if not photo.is_file() or photo.suffix.lower() not in IMAGE_EXTS:
+            continue
+        try:
+            status = index_photo_faces(eid, photo.read_bytes(), photo.name)
+            if status.get("indexed"):
+                indexed_photos += 1
+                indexed_faces += int(status.get("faces", 0))
+            else:
+                failed.append({"name": photo.name, "reason": status.get("reason", "Not indexed")})
+        except Exception as exc:
+            failed.append({"name": photo.name, "reason": str(exc)[:220]})
+    return {
+        "indexed_photos": indexed_photos,
+        "indexed_faces": indexed_faces,
+        "failed_count": len(failed),
+        "failed": failed[:30],
+        "message": f"Indexed {indexed_faces} faces from {indexed_photos} photos.",
+    }
+
 
 @app.get("/api/events/{eid}/photos/{name}")
-def get_photo(eid,name):
-    _,p=read_event(eid); f=p/"photos"/Path(name).name
-    if not f.is_file(): raise HTTPException(404)
-    return FileResponse(f,filename=f.name)
+def get_photo(eid: str, name: str):
+    _, folder = read_event(eid)
+    filename = Path(name).name
+    photo = folder / "photos" / filename
+    if not photo.is_file():
+        raise HTTPException(404, "Photo not found.")
+    return FileResponse(photo, filename=filename)
+
+
+@app.get("/api/events/{eid}/thumbnails/{name}")
+def get_thumbnail(eid: str, name: str):
+    _, folder = read_event(eid)
+    filename = Path(name).name
+    photo = folder / "photos" / filename
+    if not photo.is_file() or photo.suffix.lower() not in IMAGE_EXTS:
+        raise HTTPException(404, "Photo not found.")
+    try:
+        thumbnail = ensure_thumbnail(folder, photo)
+    except Exception:
+        raise HTTPException(500, "Could not create photo preview.")
+    return FileResponse(
+        thumbnail,
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=2592000, immutable"},
+    )
+
 
 @app.post("/api/events/{eid}/face-search")
-async def face_search(eid,selfie:UploadFile=File(...)):
-    _,p=read_event(eid)
-    raw=await selfie.read()
-    try: img=Image.open(io.BytesIO(raw)).convert("RGB")
-    except Exception: raise HTTPException(400,"Invalid selfie")
+async def face_search(eid: str, selfie: UploadFile = File(...), consent: bool = Form(False)):
+    _, folder = read_event(eid)
+    if not consent:
+        raise HTTPException(400, "Please agree to the face-search privacy notice before continuing.")
+    raw = await selfie.read(8 * 1024 * 1024 + 1)
+    if len(raw) > 8 * 1024 * 1024:
+        raise HTTPException(413, "Selfie must be smaller than 8 MB.")
     try:
-        import numpy as np
-        from insightface.app import FaceAnalysis
-        model=FaceAnalysis(name="buffalo_l",providers=["CPUExecutionProvider"])
-        model.prepare(ctx_id=-1,det_size=(640,640))
-        query_faces=model.get(np.asarray(img)[:,:,::-1])
-        if not query_faces: return {"matches":[],"message":"No face found. Take a clear front-facing selfie."}
-        q=query_faces[0].embedding
-        matches=[]
-        for f in (p/"photos").iterdir():
-            try:
-                arr=np.asarray(Image.open(f).convert("RGB"))[:,:,::-1]
-                for face in model.get(arr):
-                    score=float(np.dot(q,face.embedding)/(np.linalg.norm(q)*np.linalg.norm(face.embedding)+1e-9))
-                    if score>=float(os.getenv("FACE_THRESHOLD","0.38")):
-                        matches.append({"name":f.name,"url":f"/api/events/{eid}/photos/{f.name}","score":round(score,3)})
-            except Exception: continue
-        matches=sorted({x["name"]:x for x in matches}.values(),key=lambda x:x["score"],reverse=True)
-        return {"matches":matches[:100],"message":f"{len(matches)} matching photos"}
-    except ImportError:
-        raise HTTPException(503,"Face AI unavailable. Install optional insightface + onnxruntime.")
+        Image.open(io.BytesIO(raw)).verify()
+    except Exception:
+        raise HTTPException(400, "Please upload a valid selfie.")
+    try:
+        from local_face import search_photos
+        matches, message = search_photos(folder, raw)
+    except Exception as exc:
+        raise HTTPException(503, f"Local face matching could not start: {str(exc)[:220]}")
+    return {"matches": matches, "message": message}
 
-@app.post("/api/events/{eid}/sync-folder")
-def sync_folder(eid,folder:str=Form(...)):
-    # Use only on Windows/local photographer laptop. Cloud cannot read laptop paths.
-    source=Path(folder)
-    if not source.is_dir(): raise HTTPException(400,"Folder does not exist")
-    _,p=read_event(eid); dest=p/"photos"; count=0
-    for f in source.iterdir():
-        if f.suffix.lower() in [".jpg",".jpeg",".png",".webp"] and f.is_file():
-            target=dest/f.name
-            if not target.exists():
-                try: shutil.copy2(f,target); count+=1
-                except Exception: pass
-    return {"copied":count}
+
+@app.get("/api/events/{eid}/uploader-config")
+def uploader_config(eid: str, key: str = ""):
+    event, _ = read_event(eid)
+    if not key or not secrets.compare_digest(event.get("admin_token", ""), key):
+        raise HTTPException(403, "Private admin link required.")
+    return {
+        "base_url": "http://127.0.0.1:8000",
+        "watch_folder": "",
+        "event_id": eid,
+        "admin_token": key,
+        "poll_seconds": 4,
+        "max_file_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
+    }
+
+
+@app.get("/health")
+def health():
+    return {
+        "ok": True,
+        "service": "LAGGAM IPHOTOO",
+        "face_engine": FACE_ENGINE,
+        "storage_path": str(DATA),
+        "note": "Event records, photos and face index are stored on this laptop. Keep the laptop running during guest access.",
+    }
+
+
+@app.get("/robots.txt")
+def robots():
+    return HTMLResponse("User-agent: *\nDisallow: /admin/\n", media_type="text/plain")
