@@ -2,21 +2,9 @@ services:
   - type: web
     name: laggam-iphotoo
     runtime: python
-    plan: starter
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PUBLIC_BASE_URL
         sync: false
-      - key: PHOTOO_DATA
-        value: /var/data
-      - key: AWS_REGION
-        value: ap-south-1
-      - key: AWS_ACCESS_KEY_ID
-        sync: false
-      - key: AWS_SECRET_ACCESS_KEY
-        sync: false
-    disk:
-      name: laggam-iphotoo-storage
-      mountPath: /var/data
-      sizeGB: 10
