@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
@@ -17,8 +17,7 @@ DATA = Path(os.getenv("PHOTOO_DATA", "./data")).resolve()
 DATA.mkdir(parents=True, exist_ok=True)
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "25")) * 1024 * 1024
-AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
-FACE_THRESHOLD = float(os.getenv("FACE_THRESHOLD", "85"))
+FACE_ENGINE = "OpenCV YuNet + SFace (local)"
 
 app = FastAPI(title="LAGGAM IPHOTOO")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
@@ -61,65 +60,21 @@ def require_admin(eid: str, supplied: Optional[str]):
     return event
 
 
-def rekognition_client():
-    if not os.getenv("AWS_ACCESS_KEY_ID") or not os.getenv("AWS_SECRET_ACCESS_KEY"):
-        return None
-    try:
-        import boto3
-        return boto3.client("rekognition", region_name=AWS_REGION)
-    except Exception:
-        return None
-
-
-def ensure_face_collection(eid: str):
-    client = rekognition_client()
-    if client is None:
-        return None
-    collection_id = f"laggam-{eid.lower()}"
-    try:
-        client.describe_collection(CollectionId=collection_id)
-    except client.exceptions.ResourceNotFoundException:
-        client.create_collection(CollectionId=collection_id)
-    return client
-
-
-def normalized_jpeg(raw: bytes) -> bytes:
-    image = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
-    output = io.BytesIO()
-    image.save(output, format="JPEG", quality=90, optimize=True)
-    return output.getvalue()
-
-
-def rekognition_jpeg(raw: bytes) -> bytes:
-    # Rekognition image-byte operations have a 5 MB limit. Resize/compress
-    # deterministically while keeping enough detail for face matching.
-    image = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
-    for max_side in (3000, 2400, 1800, 1400, 1000):
-        candidate = image.copy()
-        candidate.thumbnail((max_side, max_side))
-        for quality in (82, 72, 62):
-            output = io.BytesIO()
-            candidate.save(output, format="JPEG", quality=quality, optimize=True)
-            data = output.getvalue()
-            if len(data) <= 5 * 1024 * 1024:
-                return data
-    raise ValueError("Image could not be compressed below the 5 MB face-service limit.")
+def public_origin(request: Request) -> str:
+    configured = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+    if configured:
+        return configured
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "127.0.0.1:8000"
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    if host.endswith("trycloudflare.com"):
+        scheme = "https"
+    return f"{scheme}://{host}".rstrip("/")
 
 
 def index_photo_faces(eid: str, raw: bytes, filename: str):
-    client = ensure_face_collection(eid)
-    if client is None:
-        return {"indexed": False, "faces": 0, "reason": "Face search is not configured. Add AWS Rekognition credentials to Render."}
-    image_bytes = rekognition_jpeg(raw)
-    response = client.index_faces(
-        CollectionId=f"laggam-{eid.lower()}",
-        Image={"Bytes": image_bytes},
-        ExternalImageId=filename[:255],
-        DetectionAttributes=[],
-        MaxFaces=100,
-        QualityFilter="AUTO",
-    )
-    return {"indexed": True, "faces": len(response.get("FaceRecords", [])), "reason": ""}
+    from local_face import index_photo
+    _, folder = read_event(eid)
+    return index_photo(folder, raw, filename)
 
 
 def list_event_records():
@@ -154,6 +109,7 @@ def events():
 
 @app.post("/api/events")
 def create_event(
+    request: Request,
     name: str = Form(...),
     event_type: str = Form("Wedding"),
     date: str = Form(""),
@@ -179,9 +135,9 @@ def create_event(
         "admin_token": token,
     }
     write_json(folder / "event.json", event)
-    base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-    guest_url = f"{base}/event/{event_id}" if base else f"/event/{event_id}"
-    admin_url = f"{base}/admin/{event_id}?key={token}" if base else f"/admin/{event_id}?key={token}"
+    base = public_origin(request)
+    guest_url = f"{base}/event/{event_id}"
+    admin_url = f"{base}/admin/{event_id}?key={token}"
     public_event = {key: value for key, value in event.items() if key != "admin_token"}
     return {
         "event": public_event,
@@ -214,12 +170,10 @@ def admin(eid: str, key: str = ""):
 
 
 @app.get("/api/events/{eid}/qr")
-def qr(eid: str):
+def qr(eid: str, request: Request):
     read_event(eid)
     import qrcode
-    origin = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-    if not origin:
-        raise HTTPException(400, "Set PUBLIC_BASE_URL to the deployed HTTPS URL.")
+    origin = public_origin(request)
     image = qrcode.make(f"{origin}/event/{eid}")
     output = io.BytesIO()
     image.save(output, format="PNG")
@@ -266,18 +220,11 @@ def list_photos(eid: str, x_admin_token: str = Header(default="")):
 
 @app.post("/api/events/{eid}/reindex")
 def reindex_event_photos(eid: str, x_admin_token: str = Header(default="")):
-    """Reset the event's face collection and index every stored photo again."""
+    """Rebuild the local face index from all photographs in this event."""
     require_admin(eid, x_admin_token)
     _, folder = read_event(eid)
-    client = rekognition_client()
-    if client is None:
-        raise HTTPException(503, "Face matching is not configured. Add AWS Rekognition credentials in Render first.")
-    collection_id = f"laggam-{eid.lower()}"
-    try:
-        client.delete_collection(CollectionId=collection_id)
-    except client.exceptions.ResourceNotFoundException:
-        pass
-    client.create_collection(CollectionId=collection_id)
+    from local_face import clear_event_index
+    clear_event_index(folder)
     indexed_photos = 0
     indexed_faces = 0
     failed = []
@@ -292,7 +239,7 @@ def reindex_event_photos(eid: str, x_admin_token: str = Header(default="")):
             else:
                 failed.append({"name": photo.name, "reason": status.get("reason", "Not indexed")})
         except Exception as exc:
-            failed.append({"name": photo.name, "reason": type(exc).__name__})
+            failed.append({"name": photo.name, "reason": str(exc)[:220]})
     return {
         "indexed_photos": indexed_photos,
         "indexed_faces": indexed_faces,
@@ -314,48 +261,21 @@ def get_photo(eid: str, name: str):
 
 @app.post("/api/events/{eid}/face-search")
 async def face_search(eid: str, selfie: UploadFile = File(...), consent: bool = Form(False)):
-    read_event(eid)
+    _, folder = read_event(eid)
     if not consent:
         raise HTTPException(400, "Please agree to the face-search privacy notice before continuing.")
     raw = await selfie.read(8 * 1024 * 1024 + 1)
     if len(raw) > 8 * 1024 * 1024:
         raise HTTPException(413, "Selfie must be smaller than 8 MB.")
     try:
-        image_bytes = rekognition_jpeg(raw)
+        Image.open(io.BytesIO(raw)).verify()
     except Exception:
-        raise HTTPException(400, "Please upload a valid selfie that can be reduced below the 5 MB face-search limit.")
-    client = rekognition_client()
-    if client is None:
-        raise HTTPException(503, "Face matching is not configured yet. The event gallery is available, but AI search needs AWS Rekognition setup by the administrator.")
-    collection_id = f"laggam-{eid.lower()}"
+        raise HTTPException(400, "Please upload a valid selfie.")
     try:
-        try:
-            client.describe_collection(CollectionId=collection_id)
-        except client.exceptions.ResourceNotFoundException:
-            return {"matches": [], "message": "No event photos have been indexed yet. Ask the photographer to upload photos first."}
-        response = client.search_faces_by_image(
-            CollectionId=collection_id,
-            Image={"Bytes": image_bytes},
-            FaceMatchThreshold=FACE_THRESHOLD,
-            MaxFaces=100,
-            QualityFilter="AUTO",
-        )
-    except client.exceptions.InvalidParameterException:
-        return {"matches": [], "message": "No clear face was detected. Please try a front-facing selfie in good light."}
+        from local_face import search_photos
+        matches, message = search_photos(folder, raw)
     except Exception as exc:
-        raise HTTPException(502, f"Face search service error: {type(exc).__name__}")
-    best = {}
-    for item in response.get("FaceMatches", []):
-        filename = item.get("Face", {}).get("ExternalImageId")
-        if filename:
-            similarity = float(item.get("Similarity", 0))
-            if filename not in best or similarity > best[filename]:
-                best[filename] = similarity
-    matches = [
-        {"name": filename, "url": f"/api/events/{eid}/photos/{filename}", "score": round(score, 1)}
-        for filename, score in sorted(best.items(), key=lambda item: item[1], reverse=True)
-    ]
-    message = f"{len(matches)} matching photos found." if matches else "No matching photos found. Try another clear selfie."
+        raise HTTPException(503, f"Local face matching could not start: {str(exc)[:220]}")
     return {"matches": matches, "message": message}
 
 
@@ -364,11 +284,8 @@ def uploader_config(eid: str, key: str = ""):
     event, _ = read_event(eid)
     if not key or not secrets.compare_digest(event.get("admin_token", ""), key):
         raise HTTPException(403, "Private admin link required.")
-    base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-    if not base:
-        raise HTTPException(400, "PUBLIC_BASE_URL is not configured.")
     return {
-        "base_url": base,
+        "base_url": "http://127.0.0.1:8000",
         "watch_folder": "",
         "event_id": eid,
         "admin_token": key,
@@ -382,9 +299,9 @@ def health():
     return {
         "ok": True,
         "service": "LAGGAM IPHOTOO",
-        "face_matching_configured": bool(rekognition_client()),
+        "face_engine": FACE_ENGINE,
         "storage_path": str(DATA),
-        "note": "Persistent storage must be configured on the host before real events.",
+        "note": "Event records, photos and face index are stored on this laptop. Keep the laptop running during guest access.",
     }
 
 
