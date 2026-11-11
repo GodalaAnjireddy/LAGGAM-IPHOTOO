@@ -77,6 +77,28 @@ def index_photo_faces(eid: str, raw: bytes, filename: str):
     return index_photo(folder, raw, filename)
 
 
+def ensure_thumbnail(event_folder: Path, photo_path: Path) -> Path:
+    """Create a small cached WebP preview; original file is never modified."""
+    thumb_dir = event_folder / "thumbnails"
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    thumb_path = thumb_dir / (photo_path.name + ".webp")
+    try:
+        if thumb_path.is_file() and thumb_path.stat().st_mtime_ns >= photo_path.stat().st_mtime_ns:
+            return thumb_path
+    except OSError:
+        pass
+
+    with Image.open(photo_path) as source:
+        image = ImageOps.exif_transpose(source)
+        image.thumbnail((640, 640), Image.Resampling.LANCZOS)
+        if image.mode not in ("RGB", "RGBA"):
+            image = image.convert("RGB")
+        temp = thumb_path.with_suffix(thumb_path.suffix + ".tmp")
+        image.save(temp, format="WEBP", quality=72, method=4)
+        temp.replace(thumb_path)
+    return thumb_path
+
+
 def list_event_records():
     records = []
     for folder in DATA.iterdir():
@@ -196,7 +218,13 @@ async def upload(eid: str, file: UploadFile = File(...), x_admin_token: str = He
         raise HTTPException(400, "The uploaded file is not a valid image.")
     extension = Path(file.filename or ".jpg").suffix.lower()
     filename = f"{uuid.uuid4().hex}{extension}"
-    (folder / "photos" / filename).write_bytes(raw)
+    original_path = folder / "photos" / filename
+    original_path.write_bytes(raw)
+    # Build a small preview once; guest phones never need the 12 MB original to show a result.
+    try:
+        ensure_thumbnail(folder, original_path)
+    except Exception:
+        pass
     face_status = {"indexed": False, "faces": 0, "reason": "Face AI not configured"}
     try:
         face_status = index_photo_faces(eid, raw, filename)
@@ -215,7 +243,15 @@ def list_photos(eid: str, x_admin_token: str = Header(default="")):
     require_admin(eid, x_admin_token)
     _, folder = read_event(eid)
     photo_dir = folder / "photos"
-    return [{"name": path.name, "url": f"/api/events/{eid}/photos/{path.name}"} for path in sorted(photo_dir.iterdir()) if path.is_file()]
+    result = []
+    for path in sorted(photo_dir.iterdir()):
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTS:
+            result.append({
+                "name": path.name,
+                "url": f"/api/events/{eid}/photos/{path.name}",
+                "thumbnail_url": f"/api/events/{eid}/thumbnails/{path.name}",
+            })
+    return result
 
 
 @app.post("/api/events/{eid}/reindex")
@@ -257,6 +293,24 @@ def get_photo(eid: str, name: str):
     if not photo.is_file():
         raise HTTPException(404, "Photo not found.")
     return FileResponse(photo, filename=filename)
+
+
+@app.get("/api/events/{eid}/thumbnails/{name}")
+def get_thumbnail(eid: str, name: str):
+    _, folder = read_event(eid)
+    filename = Path(name).name
+    photo = folder / "photos" / filename
+    if not photo.is_file() or photo.suffix.lower() not in IMAGE_EXTS:
+        raise HTTPException(404, "Photo not found.")
+    try:
+        thumbnail = ensure_thumbnail(folder, photo)
+    except Exception:
+        raise HTTPException(500, "Could not create photo preview.")
+    return FileResponse(
+        thumbnail,
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=2592000, immutable"},
+    )
 
 
 @app.post("/api/events/{eid}/face-search")
