@@ -15,8 +15,13 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-py -m pip install --upgrade pip
-py -m pip install -r requirements.txt
+if not exist ".venv\Scripts\python.exe" (
+  py -3.11 -m venv .venv 2>nul
+  if errorlevel 1 py -3.10 -m venv .venv
+)
+call ".venv\Scripts\activate.bat"
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 if errorlevel 1 (
   echo Package installation failed. Check Internet and available disk space.
   pause
@@ -26,5 +31,5 @@ echo.
 echo Starting local server. Keep this window open during the event.
 echo Your photos and event records are stored in: %PHOTOO_DATA%
 start "" http://127.0.0.1:8000
-py -m uvicorn app:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
+python -m uvicorn app:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
 pause
