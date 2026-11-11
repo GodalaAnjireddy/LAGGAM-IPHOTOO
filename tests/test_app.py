@@ -16,7 +16,7 @@ import app as application
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(application, "DATA", tmp_path)
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://example.test")
-    monkeypatch.setattr(application, "rekognition_client", lambda: None)
+    monkeypatch.setattr(application, "index_photo_faces", lambda eid, raw, name: {"indexed": True, "faces": 1, "reason": ""})
     return TestClient(application.app)
 
 
@@ -86,7 +86,9 @@ def test_upload_requires_admin_and_lists_gallery(client):
     assert public_photo.content == photo
 
 
-def test_face_search_requires_consent_and_reports_not_configured(client):
+def test_face_search_requires_consent_and_returns_local_matches(client, monkeypatch):
+    import local_face
+    monkeypatch.setattr(local_face, "search_photos", lambda folder, raw: ([], "No matching photos found."))
     created = create_event(client)
     event_id = created["event"]["id"]
     photo = jpeg_bytes()
@@ -96,12 +98,14 @@ def test_face_search_requires_consent_and_reports_not_configured(client):
         data={"consent": "false"},
     )
     assert denied.status_code == 400
-    not_configured = client.post(
+    searched = client.post(
         f"/api/events/{event_id}/face-search",
         files={"selfie": ("selfie.jpg", photo, "image/jpeg")},
         data={"consent": "true"},
     )
-    assert not_configured.status_code == 503
+    assert searched.status_code == 200
+    assert searched.json()["matches"] == []
+    assert searched.json()["message"] == "No matching photos found."
 
 
 def test_legacy_event_folder_remains_accessible(client, tmp_path):
@@ -111,7 +115,10 @@ def test_legacy_event_folder_remains_accessible(client, tmp_path):
     assert client.get("/event/ABC12345").status_code == 200
     assert client.get("/admin/ABC12345").status_code == 200
 
-def test_admin_reindex_requires_admin_and_reports_unconfigured_ai(client):
+def test_admin_reindex_requires_admin_and_works_with_local_index(client, monkeypatch):
+    import local_face
+    monkeypatch.setattr(local_face, "clear_event_index", lambda folder: None)
+    monkeypatch.setattr(application, "index_photo_faces", lambda eid, raw, name: {"indexed": True, "faces": 1, "reason": ""})
     created = create_event(client)
     event_id = created["event"]["id"]
     denied = client.post(f"/api/events/{event_id}/reindex")
@@ -120,7 +127,9 @@ def test_admin_reindex_requires_admin_and_reports_unconfigured_ai(client):
         f"/api/events/{event_id}/reindex",
         headers={"X-Admin-Token": created["admin_token"]},
     )
-    assert allowed.status_code == 503
+    assert allowed.status_code == 200
+    assert allowed.json()["indexed_photos"] == 0
+    assert allowed.json()["indexed_faces"] == 0
 
 def test_windows_uploader_source_has_valid_python_syntax():
     import ast
