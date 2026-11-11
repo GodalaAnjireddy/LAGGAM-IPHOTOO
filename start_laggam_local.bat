@@ -4,6 +4,7 @@ cd /d "%~dp0"
 title LAGGAM IPHOTOO - Local Event Server
 set PHOTOO_DATA=%~dp0data
 set PHOTOO_MODEL_DIR=%~dp0models
+set PUBLIC_BASE_URL=
 if not exist "%PHOTOO_DATA%" mkdir "%PHOTOO_DATA%"
 echo ================================================
 echo LAGGAM IPHOTOO - FREE LOCAL EVENT SERVER
