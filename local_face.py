@@ -128,15 +128,18 @@ def _database(event_folder: Path):
         if legacy_path.is_file():
             try:
                 legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
+                face_numbers = {}
                 for item in legacy:
                     vector = item.get("vector")
                     filename = item.get("filename")
                     if filename and vector:
                         import numpy as np
+                        face_no = face_numbers.get(filename, 0)
+                        face_numbers[filename] = face_no + 1
                         blob = np.asarray(vector, dtype=np.float32).tobytes()
                         connection.execute(
                             "INSERT OR REPLACE INTO faces(filename, face_no, vector) VALUES(?,?,?)",
-                            (filename, 0, blob),
+                            (filename, face_no, blob),
                         )
             except Exception as exc:
                 connection.close()
