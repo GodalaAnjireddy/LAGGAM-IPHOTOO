@@ -1,102 +1,82 @@
-# LAGGAM IPHOTOO — SriLekha Photography
+# LAGGAM IPHOTOO — Free local event photo gallery
 
-An event photo gallery for weddings, birthdays, saree functions, engagements, receptions and other celebrations.
+LAGGAM IPHOTOO runs on the photographer's Windows laptop. Event records, photos and face embeddings stay in the laptop's local `data` folder. Guests open the selected event using a temporary free public link.
 
-## What is in this branch
+## No paid Render storage or AWS account required
 
-- Branded home, event and guest pages with an IPHOTOO camera wordmark.
-- Event categories, event codes and an event-history list.
-- Guest QR codes that point to the public Render site.
-- Private event-admin links and token-protected photo upload/admin gallery APIs.
-- Manual photo upload and per-event photo galleries.
-- Face detection/indexing and selfie search through **Amazon Rekognition face collections** (requires AWS credentials and permission setup).
-- A Windows folder-watcher uploader for Nikon Wireless Transmitter Utility transfer folders.
-- Render deployment configuration using `PHOTOO_DATA=/var/data`.
+- Run the FastAPI app on the Windows laptop using `start_laggam_local.bat`.
+- The laptop stores event JSON, original photos and face index under `data/<EVENT_ID>/`.
+- Local face matching uses OpenCV YuNet + SFace. The app downloads the official unquantized model files once and caches them in `models/`.
+- The public guest URL is shared through a Cloudflare Quick Tunnel (free, temporary). It only works while the laptop, server and tunnel remain running.
+- Render Free may continue to host a demo homepage, but do not create real events or upload private photographs to Render Free. Its filesystem is ephemeral and data can be lost on spin-down, restart or redeploy.
 
-## Read this before deploying — storage
+## Start the free local system
 
-Render's free web services use an ephemeral filesystem. Photos and JSON event records stored there can be lost when a service restarts, spins down, or redeploys. This project stores event metadata and images beneath `PHOTOO_DATA`, so the production service **must** have durable storage mounted at `/var/data`.
+1. Download this repository branch to the Windows laptop and extract it.
+2. Install Python 3.10 or 3.11 if it is not installed. During setup, select **Add Python to PATH**.
+3. Double-click `start_laggam_local.bat`. It installs Python dependencies and starts the app at `http://127.0.0.1:8000`.
+4. Install Cloudflare Tunnel once from an Administrator/normal Command Prompt:
+   ```cmd
+   winget install --id Cloudflare.cloudflared --exact
+   ```
+5. Double-click `start_public_guest_link.bat`. It prints a random HTTPS address ending in `.trycloudflare.com`.
+6. Copy that public address and open it in the laptop browser. **Create your event from that public address, not from localhost**, so the event's guest and admin links use the same public address.
+7. Keep both command windows open throughout the event. Do not close or restart the tunnel after printing the QR. If the tunnel restarts, its URL changes and the event QR must be regenerated.
 
-For the current Render service:
-1. In Render, open **LAGGAM-IPHOTOO → Settings / Compute** and upgrade the web service from Free to a paid instance.
-2. Add a persistent disk mounted at exactly `/var/data` (the blueprint specifies 10 GB).
-3. Confirm the environment variable `PHOTOO_DATA=/var/data`.
-4. Set `PUBLIC_BASE_URL=https://laggam-iphotoo.onrender.com` (use the exact URL shown in your Render dashboard).
-5. Do not deploy the new version until durable storage is attached. If the existing service has stored test images on its free filesystem, download/back them up before redeploying; Render free storage is not a reliable archive.
+Quick Tunnels are for testing/development, not guaranteed production hosting. They do not require a Cloudflare account or domain, but the URL is temporary and stops working when the tunnel process stops. See the Cloudflare documentation: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/
 
-Persistent disks are only available on paid Render web services. The current app uses a single service instance because the disk is attached to one instance.
+## Create and manage events
 
-## Deploy this branch
+The home page supports Wedding, Birthday, Saree Function, Engagement, Reception, Anniversary and Other Event.
 
-The changes are on branch `feature/event-gallery-auto-sync` and are not yet on the live `main` branch.
+1. Create the event from the tunnel URL.
+2. Save its event code and private Admin link. Never give the Admin link to guests.
+3. Refresh the home page to see the Created Events list. Event records are stored in the laptop's `data` folder and remain after app restarts, provided that folder is not deleted.
+4. Open the private Admin link, enter the exact Nikon transfer folder path and download the uploader config.
+5. Keep the guest QR code available to guests.
 
-1. Open the GitHub pull request for this branch and review the changes.
-2. Configure durable storage in Render as described above.
-3. Merge the pull request into `main` after storage is ready. Render will deploy from `main` if the existing service is connected to that branch.
-4. Verify `https://laggam-iphotoo.onrender.com/health` returns `{"ok":true,...}`.
-5. Open the site, create a test event, refresh the page, and confirm it remains in **Created events**.
+## Nikon Z6 automatic photo workflow
 
-## Event workflow
+1. Use Nikon Wireless Transmitter Utility to save JPEG files to your known transfer folder, e.g. `C:\Users\YourName\Desktop\New folder\Z 6 7606864\DCIM\145NCZ_6`.
+2. Connect the Nikon Z6 and laptop to the same mobile hotspot/router where supported. The laptop needs Internet for the public guest tunnel.
+3. In the event Admin page, enter the Nikon destination folder and download the uploader config.
+4. Download `windows-uploader/uploader.py` and `windows-uploader/install_and_run.bat` from this repository branch. Put both in one folder with the downloaded `config.json`.
+5. Double-click `install_and_run.bat` and leave it running. It watches for completed JPG/JPEG/PNG/WEBP files and uploads them to the local app at `http://127.0.0.1:8000`. It does not remove files from the Nikon folder or memory card.
+6. Test with a few JPEGs before the real event. Nikon RAW/NEF files are not included in the guest gallery by this MVP.
 
-1. Create an event and choose its type.
-2. Save the event code and private Admin link. The event code/guest page are public; never share the private Admin link.
-3. Open Admin and configure the Nikon transfer folder.
-4. Download the Windows uploader config and save it as `windows-uploader/config.json` beside `uploader.py`.
-5. Install and run the Windows folder uploader. Keep it running while the camera is transferring photographs.
-6. Print/share the event QR code. Guests can use any Internet connection to open the guest page.
-7. Guests take/select a selfie, check the face-search consent box, and search. Matching event photos appear with download links.
+## Free local face detection and matching
 
-## Nikon Z6 camera-to-laptop transfer
+- Uses OpenCV Zoo YuNet for face detection and SFace for face embeddings.
+- The first face indexing requires Internet to download the model weights. Later recognition runs locally on the laptop.
+- The app intentionally uses the unquantized SFace ONNX model, avoiding the quantized ONNX node that failed in the previous OpenCV DNN setup.
+- New uploaded photos are indexed automatically. The Admin page includes **Re-index all photos for face search** for images uploaded earlier.
+- Guests choose/take a selfie, explicitly consent, and search against the event's local face index. The selfie is processed in memory and is not saved by the application.
 
-Use Nikon Wireless Transmitter Utility and set its destination folder to the folder you enter in the event Admin page. The Nikon Z6 is listed among cameras that support the built-in wireless LAN pairing workflow; the utility lets you choose the Windows destination folder.
+Model notices and licenses:
+- YuNet model: MIT license (OpenCV Zoo model folder).
+- SFace model: Apache 2.0 license (OpenCV Zoo model folder).
+- Model files are downloaded from the official OpenCV Zoo repository and are not committed into this Git repository.
 
-**Network note:** If the laptop is connected directly to the camera's Wi-Fi access point, it may not have Internet at the same time. The folder uploader needs Internet to reach Render. Prefer connecting both the laptop and camera to the same Wi-Fi router/mobile hotspot in infrastructure mode, where supported. Otherwise connect the laptop to Internet through Ethernet or a second Wi-Fi adapter while the first adapter is connected to the camera. Test this before the event.
+## Important network and uptime notes
 
-The Windows uploader sends JPG/JPEG/PNG/WEBP files. Nikon RAW/NEF files are not uploaded by this MVP; keep them on the camera card and laptop backup. Use JPEG transfer from the camera for the guest gallery.
+- Laptop must remain powered on, connected to the Internet and running both the local app and Cloudflare tunnel while guests access photos.
+- Keep the phone hotspot powered and connected. If the laptop loses Internet, guests outside the venue cannot open the QR link.
+- A Cloudflare Quick Tunnel URL changes when restarted. Create/print QR only after starting the tunnel; avoid closing the tunnel until guests finish.
+- If the camera/laptop cannot both stay on the same hotspot, use a second Wi-Fi adapter or Ethernet for the laptop Internet connection.
+- Back up the entire `data` folder to an external drive after the event. This is the only permanent copy unless you make another backup.
+- This free method is suitable for a one-event test/temporary event, not a guaranteed always-on commercial hosting service.
 
-## Face matching setup (AWS Rekognition)
+## Local folders
 
-The face-matching code is present, but **selfie matching remains disabled until AWS is configured**.
+- `data/<EVENT_ID>/event.json` — event details and private admin token.
+- `data/<EVENT_ID>/photos/` — original gallery JPEG/PNG/WEBP files.
+- `data/<EVENT_ID>/face_index.json` — local face feature vectors.
+- `models/` — cached YuNet and SFace model files.
+- `windows-uploader/config.json` — private event uploader configuration; do not upload it to GitHub.
 
-1. Create an AWS account and enable Amazon Rekognition in a supported region (default in this app: `ap-south-1`).
-2. Create a dedicated IAM user/access key for this application, with only the following Rekognition actions on the account:
-   - `rekognition:CreateCollection`
-   - `rekognition:DescribeCollection`
-   - `rekognition:IndexFaces`
-   - `rekognition:SearchFacesByImage`
-   - `rekognition:DeleteCollection` (needed for the admin Re-index all photos action)
-3. In Render → Environment, set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_REGION=ap-south-1`. Never put the secret key in GitHub or in a public message.
-4. Redeploy. Upload one test photo containing a visible face. The upload response reports the face-indexing result.
-5. If you uploaded photos before configuring AWS, open event Admin and click **Re-index all photos for face search** once. This rebuilds the event's Rekognition collection from the stored photos.\n6. Test with a clear front-facing selfie and verify the matching images before relying on it.
-
-AWS charges for Rekognition usage may apply. Rekognition stores face feature vectors in its collection for matching; the uploaded photo remains in this app's photo storage. Provide a clear notice and get affirmative consent before a guest uses face search. Provide an event photo/face-data removal procedure before using this for real events.
-
-## Local development
-
-```cmd
-python -m venv .venv
-.venv\\Scripts\\activate
-pip install -r requirements.txt
-set PUBLIC_BASE_URL=http://127.0.0.1:8000
-set PHOTOO_DATA=./data
-uvicorn app:app --host 0.0.0.0 --port 8000
-```
-
-For tests:
+## Run tests
 
 ```cmd
 pip install -r requirements-dev.txt
 pytest -q
 ```
-
-## Windows uploader files
-
-See [windows-uploader/README.md](windows-uploader/README.md). Never commit `config.json` or `uploaded_state_EVENTCODE.json`; they are excluded by `.gitignore`.
-
-## Known MVP limitations
-
-- Event data and photos use the configured local data directory. Use a persistent Render disk at `/var/data` before real events.
-- The Windows uploader runs while its command window is open; it is not yet installed as a Windows background service.
-- Face search is a one-selfie / face-collection search. Match quality depends on pose, lighting and face size. Review results, and let guests browse/download only where the event organiser has permission.
-- Admin access uses a private, high-entropy URL token. Treat it like a password.
-- This is an MVP and still needs an explicit event deletion/retention workflow and broader production security review before large-scale commercial operation.
