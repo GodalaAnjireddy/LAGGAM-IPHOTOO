@@ -81,6 +81,11 @@ def test_upload_requires_admin_and_lists_gallery(client):
     listed = client.get(f"/api/events/{event_id}/photos", headers=headers)
     assert listed.status_code == 200
     assert len(listed.json()) == 1
+    assert listed.json()[0]["thumbnail_url"].endswith("/thumbnails/" + listed.json()[0]["name"])
+    thumbnail = client.get(listed.json()[0]["thumbnail_url"])
+    assert thumbnail.status_code == 200
+    assert thumbnail.headers["content-type"] == "image/webp"
+    assert thumbnail.headers["cache-control"].startswith("public")
     public_photo = client.get(listed.json()[0]["url"])
     assert public_photo.status_code == 200
     assert public_photo.content == photo
@@ -147,3 +152,20 @@ def test_unquantized_yunet_and_sface_models_load():
     assert detector is not None
     assert recognizer is not None
     assert hasattr(cv2, "FaceRecognizerSF_FR_COSINE")
+
+
+
+def test_local_face_index_uses_sqlite_and_returns_thumbnail_url(tmp_path, monkeypatch):
+    import numpy as np
+    import local_face
+
+    vector = np.ones(128, dtype=np.float32)
+    vector /= np.linalg.norm(vector)
+    monkeypatch.setattr(local_face, "_image", lambda raw, max_side: [vector])
+    local_face.index_photo(tmp_path, b"test-image-bytes", "photo.jpg")
+    matches, message = local_face.search_photos(tmp_path, b"selfie-bytes")
+    assert len(matches) == 1
+    assert matches[0]["name"] == "photo.jpg"
+    assert matches[0]["thumbnail_url"].endswith("/thumbnails/photo.jpg")
+    assert "1 matching" in message
+    assert (tmp_path / "face_index.sqlite3").is_file()
