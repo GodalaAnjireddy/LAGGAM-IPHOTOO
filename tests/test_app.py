@@ -137,3 +137,13 @@ def test_windows_uploader_source_has_valid_python_syntax():
 
     source = Path(__file__).resolve().parents[1] / "windows-uploader" / "uploader.py"
     ast.parse(source.read_text(encoding="utf-8"))
+
+def test_unquantized_yunet_and_sface_models_load():
+    # This downloads the small official OpenCV Zoo model files in CI and verifies
+    # that the unquantized models load through the OpenCV 4.10 DNN APIs.
+    from local_face import _engine
+
+    cv2, detector, recognizer = _engine()
+    assert detector is not None
+    assert recognizer is not None
+    assert hasattr(cv2, "FaceRecognizerSF_FR_COSINE")
